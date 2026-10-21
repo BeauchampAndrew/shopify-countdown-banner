@@ -1,0 +1,688 @@
+{%- comment -%}
+  Countdown Banner (free Shopify section)
+
+  Sticky sale banner with a live days / hours / minutes countdown.
+  Shows between the start and end time you set, then hides itself.
+
+  Everything lives in this one file: markup, styles, countdown logic and
+  theme editor settings. Search for "stylesheet", "javascript" and "schema"
+  to jump to each part.
+{%- endcomment -%}
+
+{%- liquid
+  assign tz = section.settings.timezone
+  assign start_iso = section.settings.start | strip | replace: ' ', 'T' | append: ':00' | append: tz
+  assign end_iso = section.settings.end | strip | replace: ' ', 'T' | append: ':00' | append: tz
+
+  # The date filter returns its input unchanged when it can't parse it,
+  # so a value containing "-" means the date was typed in the wrong format.
+  assign now_s = 'now' | date: '%s' | plus: 0
+  assign start_raw = start_iso | date: '%s'
+  assign end_raw = end_iso | date: '%s'
+  assign valid = true
+  if start_raw contains '-' or end_raw contains '-'
+    assign valid = false
+  endif
+  assign start_s = start_raw | plus: 0
+  assign end_s = end_raw | plus: 0
+
+  # Server-side state so the banner paints in the right state with no flash.
+  # The JS takes over from here and keeps it accurate as time passes.
+  assign expired = false
+  assign active = false
+  if valid
+    if now_s > end_s
+      assign expired = true
+    elsif now_s >= start_s
+      assign active = true
+    endif
+  endif
+
+  assign remaining = end_s | minus: now_s | at_least: 0
+  unless section.settings.show_seconds
+    # Round up to the next minute so "0 min" never shows while time is left (matches the JS)
+    assign remaining = remaining | plus: 59 | divided_by: 60 | times: 60
+  endunless
+  assign days = remaining | divided_by: 86400
+  assign hours = remaining | modulo: 86400 | divided_by: 3600
+  assign minutes = remaining | modulo: 3600 | divided_by: 60
+  assign seconds = remaining | modulo: 60
+-%}
+
+{%- unless expired and request.design_mode == false -%}
+  <countdown-banner
+    class="countdown-banner"
+    data-start="{{ start_iso }}"
+    data-end="{{ end_iso }}"
+    data-show-seconds="{{ section.settings.show_seconds }}"
+    {% if section.settings.sticky %}data-sticky{% endif %}
+    {% if section.settings.scrolling %}data-scrolling data-scroll-speed="{{ section.settings.scroll_speed }}"{% endif %}
+    {% if request.design_mode %}data-editor{% endif %}
+    {% unless active or request.design_mode %}hidden{% endunless %}
+    style="
+      --countdown-bg: {{ section.settings.background_color }};
+      --countdown-fg: {{ section.settings.text_color }};
+      --countdown-font-size: {{ section.settings.font_size }}px;
+      --countdown-font-size-mobile: {{ section.settings.font_size_mobile }}px;
+      --countdown-padding: {{ section.settings.padding }}px;
+    "
+    role="region"
+    aria-label="{{ section.settings.heading | strip_html | escape }}"
+  >
+    <div class="countdown-banner__inner">
+      {%- if section.settings.heading != blank -%}
+        <p class="countdown-banner__heading">{{ section.settings.heading }}</p>
+      {%- endif -%}
+
+      <p class="countdown-banner__timer">
+        {%- if section.settings.timer_label != blank -%}
+          <span class="countdown-banner__label">{{ section.settings.timer_label | escape }}</span>
+        {%- endif -%}
+        <span class="countdown-banner__unit" data-unit="days"{% if days == 0 %} hidden{% endif %}>
+          <span class="countdown-banner__value" data-value>{% if days < 10 %}0{% endif %}{{ days }}</span>
+          <span class="countdown-banner__suffix">{{ section.settings.label_days | escape }}</span>
+        </span>
+        <span class="countdown-banner__unit" data-unit="hours">
+          <span class="countdown-banner__value" data-value>{{ hours | prepend: '0' | slice: -2, 2 }}</span>
+          <span class="countdown-banner__suffix">{{ section.settings.label_hours | escape }}</span>
+        </span>
+        <span class="countdown-banner__unit" data-unit="minutes">
+          <span class="countdown-banner__value" data-value>{{ minutes | prepend: '0' | slice: -2, 2 }}</span>
+          <span class="countdown-banner__suffix">{{ section.settings.label_minutes | escape }}</span>
+        </span>
+        <span class="countdown-banner__unit" data-unit="seconds"{% unless section.settings.show_seconds %} hidden{% endunless %}>
+          <span class="countdown-banner__value" data-value>{{ seconds | prepend: '0' | slice: -2, 2 }}</span>
+          <span class="countdown-banner__suffix">{{ section.settings.label_seconds | escape }}</span>
+        </span>
+      </p>
+
+      {%- if section.settings.button_label != blank and section.settings.link != blank -%}
+        {%- comment -%} Visual only. The cover link below handles the click. {%- endcomment -%}
+        <span class="countdown-banner__button" aria-hidden="true">
+          {{- section.settings.button_label | escape -}}
+        </span>
+      {%- endif -%}
+    </div>
+
+    {%- if section.settings.link != blank -%}
+      {%- comment -%}
+        Makes the whole banner clickable. It sits outside the content so the
+        scrolling copies don't duplicate it and it doesn't move with the text.
+      {%- endcomment -%}
+      <a class="countdown-banner__cover-link" href="{{ section.settings.link }}">
+        <span class="countdown-banner__visually-hidden">
+          {%- if section.settings.button_label != blank -%}
+            {{ section.settings.button_label | escape }}:
+          {% endif -%}
+          {{- section.settings.heading | strip_html | escape -}}
+        </span>
+      </a>
+    {%- endif -%}
+
+    {%- if request.design_mode -%}
+      <p class="countdown-banner__editor-note" data-editor-note hidden></p>
+    {%- endif -%}
+  </countdown-banner>
+{%- endunless -%}
+
+{% stylesheet %}
+/*
+ * Countdown Banner styles.
+ * Colors, size and padding come from the theme editor as CSS variables on
+ * <countdown-banner>. Everything else can be changed here.
+ */
+
+.countdown-banner {
+  display: block;
+  background: var(--countdown-bg, #d0021b);
+  color: var(--countdown-fg, #fff);
+  font-size: var(--countdown-font-size, 14px);
+  line-height: 1.3;
+  position: relative;
+}
+
+.countdown-banner[hidden],
+.countdown-banner [hidden] {
+  display: none !important;
+}
+
+.countdown-banner__inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  column-gap: 1.25em;
+  row-gap: 0.25em;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--countdown-padding, 10px) 16px;
+  text-align: center;
+}
+
+.countdown-banner p {
+  margin: 0;
+}
+
+.countdown-banner__heading {
+  letter-spacing: 0.04em;
+}
+
+.countdown-banner__heading a {
+  color: inherit;
+}
+
+.countdown-banner__timer {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.6em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.countdown-banner__unit {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2em;
+}
+
+.countdown-banner__value {
+  font-weight: 700;
+  font-size: 1.15em;
+}
+
+.countdown-banner__suffix {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.countdown-banner__button {
+  display: inline-block;
+  padding: 0.35em 1em;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: inherit;
+  font-size: 0.85em;
+  font-weight: 700;
+  text-decoration: none;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.countdown-banner:hover .countdown-banner__button {
+  background: var(--countdown-fg, #fff);
+  color: var(--countdown-bg, #d0021b);
+}
+
+/* Makes the whole banner clickable whenever a link is set */
+.countdown-banner__cover-link {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+
+.countdown-banner__cover-link:focus-visible {
+  outline: 2px solid var(--countdown-fg, #fff);
+  outline-offset: -4px;
+}
+
+.countdown-banner__visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Only rendered inside the Shopify theme editor */
+.countdown-banner__editor-note {
+  padding: 4px 16px;
+  background: #000;
+  color: #fff;
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 749px) {
+  .countdown-banner {
+    font-size: var(--countdown-font-size-mobile, 13px);
+  }
+
+  .countdown-banner__inner {
+    flex-direction: column;
+  }
+}
+
+/* ------------------------------------------------------------------
+ * Scrolling text (the "Scrolling text" checkbox)
+ *
+ * The JS repeats the content inside .countdown-banner__track and sets
+ * --countdown-scroll-duration from the speed setting. The track slides left
+ * by half its width, which lines up exactly with its starting point.
+ * ------------------------------------------------------------------ */
+
+.countdown-banner[data-scrolling] {
+  overflow: hidden;
+}
+
+.countdown-banner__track {
+  display: flex;
+  width: max-content;
+  animation: countdown-banner-scroll var(--countdown-scroll-duration, 30s) linear infinite;
+}
+
+.countdown-banner:hover .countdown-banner__track {
+  animation-play-state: paused;
+}
+
+.countdown-banner__track .countdown-banner__inner {
+  flex: none;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  max-width: none;
+  margin: 0;
+  padding-inline: 1.5em;
+  white-space: nowrap;
+}
+
+@keyframes countdown-banner-scroll {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .countdown-banner__track {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------------
+ * Sticky behavior
+ *
+ * Shopify wraps every section in a <div class="shopify-section">, so the
+ * sticky rule goes on that wrapper. The JS keeps --countdown-banner-height
+ * up to date so a sticky theme header can sit just below the banner.
+ * ------------------------------------------------------------------ */
+
+.countdown-banner-section:has(> countdown-banner[data-sticky]:not([hidden])) {
+  position: sticky;
+  top: 0;
+  /* Same layer as Horizon's header. The header comes later in the page, so its
+     menus and drawers still open on top of the banner. */
+  z-index: var(--layer-menu-drawer, 4);
+}
+
+/* Horizon: let the banner stick to the whole page, not just the header area */
+#header-group:has(countdown-banner[data-sticky]:not([hidden])) {
+  display: contents;
+}
+
+/* Horizon: push the sticky header down below the banner */
+body:has(countdown-banner[data-sticky]:not([hidden])) .header-section:has(> #header-component[sticky]) {
+  top: calc(var(--countdown-banner-height, 0px) - 1px);
+}
+
+/* Dawn and most other Shopify themes built on Dawn */
+body:has(countdown-banner[data-sticky]:not([hidden])) .shopify-section-header-sticky {
+  top: var(--countdown-banner-height, 0px);
+}
+{% endstylesheet %}
+
+{% javascript %}
+/*
+ * Countdown Banner logic.
+ *
+ * Reads data-start and data-end (ISO dates with a timezone offset) from
+ * <countdown-banner>, shows the banner between them, counts down to the end,
+ * and hides the banner when time runs out. With data-scrolling, the content
+ * is repeated and slides across the bar in a loop.
+ */
+(() => {
+  if (customElements.get('countdown-banner')) return;
+
+  const MINUTE = 60 * 1000;
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+
+  const pad = (n) => String(n).padStart(2, '0');
+
+  class CountdownBanner extends HTMLElement {
+    connectedCallback() {
+      this.start = new Date(this.dataset.start).getTime();
+      this.end = new Date(this.dataset.end).getTime();
+      this.showSeconds = this.dataset.showSeconds === 'true';
+      this.isEditor = this.hasAttribute('data-editor');
+      this.note = this.querySelector('[data-editor-note]');
+      this.collectUnits();
+
+      this.resizeObserver = new ResizeObserver(() => this.updateHeightVar());
+      this.resizeObserver.observe(this);
+
+      this.onVisibilityChange = () => {
+        if (!document.hidden) this.tick();
+      };
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
+
+      this.tick();
+    }
+
+    disconnectedCallback() {
+      clearTimeout(this.timer);
+      this.resizeObserver?.disconnect();
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
+      document.documentElement.style.removeProperty('--countdown-banner-height');
+    }
+
+    // A unit name can appear several times once scrolling copies the content.
+    collectUnits() {
+      this.units = {};
+      for (const el of this.querySelectorAll('[data-unit]')) {
+        (this.units[el.dataset.unit] ??= []).push({ el, value: el.querySelector('[data-value]') });
+      }
+    }
+
+    // Runs the first time the banner is visible, since it needs real widths.
+    buildMarquee() {
+      if (this.marqueeBuilt || !this.hasAttribute('data-scrolling')) return;
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      if (!this.offsetWidth) return;
+      this.marqueeBuilt = true;
+
+      const inner = this.querySelector('.countdown-banner__inner');
+      const track = document.createElement('div');
+      track.className = 'countdown-banner__track';
+      inner.replaceWith(track);
+      track.append(inner);
+
+      const itemWidth = inner.offsetWidth || 1;
+
+      // One half of the track must be at least as wide as the widest screen,
+      // then the track holds two halves and slides left by exactly one half.
+      const perHalf = Math.ceil(Math.max(window.screen.width, window.innerWidth) / itemWidth);
+      for (let i = 1; i < perHalf * 2; i++) {
+        const copy = inner.cloneNode(true);
+        copy.setAttribute('aria-hidden', 'true');
+        copy.querySelectorAll('a').forEach((link) => link.setAttribute('tabindex', '-1'));
+        track.append(copy);
+      }
+
+      const speed = Number(this.dataset.scrollSpeed) || 60;
+      track.style.setProperty('--countdown-scroll-duration', `${(perHalf * itemWidth) / speed}s`);
+      this.collectUnits();
+    }
+
+    tick() {
+      clearTimeout(this.timer);
+      const now = Date.now();
+
+      if (Number.isNaN(this.start) || Number.isNaN(this.end)) {
+        this.setState(false, 'Countdown banner: check the start and end dates. Use the format YYYY-MM-DD HH:MM.');
+        return;
+      }
+
+      if (now < this.start) {
+        this.render(this.end - now);
+        this.setState(false, 'Preview only. Customers will see this banner starting ' + this.dataset.start + '.');
+        this.timer = setTimeout(() => this.tick(), Math.min(this.start - now, DAY));
+        return;
+      }
+
+      if (now >= this.end) {
+        this.render(0);
+        this.setState(false, 'Preview only. This sale has ended, so customers no longer see this banner.');
+        return;
+      }
+
+      this.render(this.end - now);
+      this.setState(true);
+
+      // Wake up right when the displayed number changes, not on a fixed interval.
+      const step = this.showSeconds ? 1000 : MINUTE;
+      this.timer = setTimeout(() => this.tick(), ((this.end - now) % step) + 50);
+    }
+
+    render(ms) {
+      // Without seconds, round up so "0 min" never shows while time is left.
+      const total = this.showSeconds ? Math.floor(ms / 1000) * 1000 : Math.ceil(ms / MINUTE) * MINUTE;
+      const days = Math.floor(total / DAY);
+      const hours = Math.floor((total % DAY) / HOUR);
+      const minutes = Math.floor((total % HOUR) / MINUTE);
+      const seconds = Math.floor((total % MINUTE) / 1000);
+
+      this.setUnit('days', days, days === 0);
+      this.setUnit('hours', hours);
+      this.setUnit('minutes', minutes);
+      this.setUnit('seconds', seconds, !this.showSeconds);
+    }
+
+    setUnit(name, value, hide = false) {
+      for (const unit of this.units[name] || []) {
+        unit.value.textContent = pad(value);
+        unit.el.hidden = hide;
+      }
+    }
+
+    setState(live, editorMessage) {
+      // In the theme editor the banner always stays visible so it can be edited.
+      this.hidden = !live && !this.isEditor;
+      if (!this.hidden) this.buildMarquee();
+
+      if (this.note) {
+        this.note.hidden = !editorMessage;
+        this.note.textContent = editorMessage || '';
+      }
+
+      this.updateHeightVar();
+    }
+
+    updateHeightVar() {
+      const height = this.hasAttribute('data-sticky') && !this.hidden ? this.offsetHeight : 0;
+      document.documentElement.style.setProperty('--countdown-banner-height', `${height}px`);
+    }
+  }
+
+  customElements.define('countdown-banner', CountdownBanner);
+})();
+{% endjavascript %}
+
+{% schema %}
+{
+  "name": "Countdown banner",
+  "tag": "div",
+  "class": "countdown-banner-section",
+  "enabled_on": {
+    "groups": ["header"]
+  },
+  "settings": [
+    {
+      "type": "header",
+      "content": "Schedule"
+    },
+    {
+      "type": "paragraph",
+      "content": "Use the format YYYY-MM-DD HH:MM (24-hour clock). Example: 2026-11-27 00:00"
+    },
+    {
+      "type": "text",
+      "id": "start",
+      "label": "Start showing",
+      "default": "2026-10-21 00:00"
+    },
+    {
+      "type": "text",
+      "id": "end",
+      "label": "Sale ends (countdown target)",
+      "default": "2026-12-01 23:59"
+    },
+    {
+      "type": "select",
+      "id": "timezone",
+      "label": "Timezone",
+      "info": "Everyone sees the same deadline, wherever they are. Pick the standard or daylight version that is in effect on your end date.",
+      "options": [
+        { "value": "-10:00", "label": "HST Hawaii (UTC-10)" },
+        { "value": "-09:00", "label": "AKST (UTC-9)" },
+        { "value": "-08:00", "label": "PST (UTC-8)" },
+        { "value": "-07:00", "label": "PDT / MST (UTC-7)" },
+        { "value": "-06:00", "label": "MDT / CST (UTC-6)" },
+        { "value": "-05:00", "label": "CDT / EST (UTC-5)" },
+        { "value": "-04:00", "label": "EDT (UTC-4)" },
+        { "value": "-03:00", "label": "UTC-3" },
+        { "value": "Z", "label": "UTC / GMT" },
+        { "value": "+01:00", "label": "CET / BST (UTC+1)" },
+        { "value": "+02:00", "label": "CEST (UTC+2)" },
+        { "value": "+03:00", "label": "UTC+3" },
+        { "value": "+05:30", "label": "IST India (UTC+5:30)" },
+        { "value": "+08:00", "label": "Singapore / Perth (UTC+8)" },
+        { "value": "+09:00", "label": "Japan / Korea (UTC+9)" },
+        { "value": "+10:00", "label": "AEST Sydney (UTC+10)" },
+        { "value": "+11:00", "label": "AEDT Sydney (UTC+11)" },
+        { "value": "+13:00", "label": "NZDT Auckland (UTC+13)" }
+      ],
+      "default": "-05:00"
+    },
+    {
+      "type": "header",
+      "content": "Content"
+    },
+    {
+      "type": "inline_richtext",
+      "id": "heading",
+      "label": "Message",
+      "default": "<strong>BLACK FRIDAY SALE: 25% OFF EVERYTHING</strong>"
+    },
+    {
+      "type": "text",
+      "id": "timer_label",
+      "label": "Timer label",
+      "default": "Ends in"
+    },
+    {
+      "type": "url",
+      "id": "link",
+      "label": "Link",
+      "info": "Optional. Makes the whole banner clickable."
+    },
+    {
+      "type": "text",
+      "id": "button_label",
+      "label": "Button label",
+      "info": "Optional. Shows a button as a visual cue. Needs a link."
+    },
+    {
+      "type": "header",
+      "content": "Timer"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_seconds",
+      "label": "Show seconds",
+      "default": false
+    },
+    {
+      "type": "text",
+      "id": "label_days",
+      "label": "Days label",
+      "default": "Days"
+    },
+    {
+      "type": "text",
+      "id": "label_hours",
+      "label": "Hours label",
+      "default": "Hrs"
+    },
+    {
+      "type": "text",
+      "id": "label_minutes",
+      "label": "Minutes label",
+      "default": "Min"
+    },
+    {
+      "type": "text",
+      "id": "label_seconds",
+      "label": "Seconds label",
+      "default": "Sec"
+    },
+    {
+      "type": "header",
+      "content": "Style"
+    },
+    {
+      "type": "checkbox",
+      "id": "sticky",
+      "label": "Stick to top of screen on scroll",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "scrolling",
+      "label": "Scrolling text",
+      "info": "Slides the message and countdown across the bar in a loop. Pauses on hover.",
+      "default": false
+    },
+    {
+      "type": "range",
+      "id": "scroll_speed",
+      "label": "Scroll speed",
+      "min": 20,
+      "max": 200,
+      "step": 10,
+      "unit": "px",
+      "default": 60,
+      "info": "Pixels per second",
+      "visible_if": "{{ section.settings.scrolling }}"
+    },
+    {
+      "type": "color",
+      "id": "background_color",
+      "label": "Background",
+      "default": "#D0021B"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Text",
+      "default": "#FFFFFF"
+    },
+    {
+      "type": "range",
+      "id": "font_size",
+      "label": "Text size (desktop)",
+      "min": 11,
+      "max": 36,
+      "step": 1,
+      "unit": "px",
+      "default": 14
+    },
+    {
+      "type": "range",
+      "id": "font_size_mobile",
+      "label": "Text size (mobile)",
+      "info": "Screens narrower than 750px",
+      "min": 10,
+      "max": 24,
+      "step": 1,
+      "unit": "px",
+      "default": 13
+    },
+    {
+      "type": "range",
+      "id": "padding",
+      "label": "Vertical padding",
+      "min": 0,
+      "max": 30,
+      "step": 1,
+      "unit": "px",
+      "default": 10
+    }
+  ],
+  "presets": [
+    {
+      "name": "Countdown banner"
+    }
+  ]
+}
+{% endschema %}
